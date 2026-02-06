@@ -30,6 +30,7 @@
 #include <string>
 
 #include "src/core/util/grpc_check.h"
+#include "src/cpp/common/tls_custom_signing_callback.h"
 
 namespace grpc {
 namespace experimental {
@@ -99,6 +100,24 @@ void TlsCredentialsOptions::set_crl_directory(const std::string& path) {
   grpc_tls_credentials_options_set_crl_directory(c_credentials_options_,
                                                  path.c_str());
 }
+
+// NOTE: This method requires adding to the TlsCredentialsOptions class:
+// In include/grpcpp/security/tls_credentials_options.h, add:
+//   - Member variable: TlsCustomSigningCallback custom_signing_callback_;
+//   - Method declaration: void
+//   set_custom_signing_callback(TlsCustomSigningCallback callback);
+//
+// Uncomment the implementation below after adding to the class definition:
+/*
+void TlsCredentialsOptions::set_custom_signing_callback(
+    TlsCustomSigningCallback signing_callback) {
+  custom_signing_callback_ = std::move(signing_callback);
+  // Note: The actual integration with grpc_tls_credentials_options
+  // requires core API support. This stores the callback for later use
+  // when creating credentials. The certificate chain should be set
+  // via the normal certificate provider mechanism.
+}
+*/
 
 void TlsCredentialsOptions::set_tls_session_key_log_file_path(
     const std::string& tls_session_key_log_file_path) {

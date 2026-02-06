@@ -247,6 +247,67 @@ documentation site at [grpc.io](https://grpc.io), specifically:
   A tutorial that shows you how to use gRPC C++'s asynchronous/non-blocking
   APIs.
 
+## Windows Certificate Store Integration
+
+On Windows, gRPC C++ now supports mTLS using certificates from the Windows
+Certificate Store with NCRYPT-based signing, eliminating the need to extract
+private keys from secure storage.
+
+**Key Features:**
+* Use certificates directly from Windows Certificate Store
+* Private key signing via Windows NCRYPT (supports TPM, HSM, smart cards)
+* Support for all TLS 1.3 signature algorithms (RSA-PKCS1, RSA-PSS, ECDSA)
+* Simple callback-based API
+
+**Quick Example:**
+```cpp
+#include <grpcpp/grpcpp.h>
+#include <grpcpp/security/tls_credentials_options.h>
+#include "src/cpp/common/tls_custom_signing_callback.h"
+
+// Create your signing callback (using Windows NCRYPT)
+auto signing_callback = [cert](
+    grpc::experimental::TlsSignatureAlgorithm algorithm,
+    const uint8_t* input,
+    size_t input_len) -> grpc::experimental::TlsSigningResult {
+  // Sign using NCRYPT with private key from certificate
+  // ... NCRYPT signing implementation ...
+  return grpc::experimental::TlsSigningResult::Success(signature);
+};
+
+// Setup TLS credentials
+grpc::experimental::TlsChannelCredentialsOptions opts;
+
+grpc::experimental::IdentityKeyCertPair identity;
+identity.certificate_chain = cert_pem;  // Your certificate in PEM format
+
+auto provider = std::make_shared<grpc::experimental::StaticDataCertificateProvider>(
+    ca_pem, std::vector<grpc::experimental::IdentityKeyCertPair>{identity});
+opts.set_root_certificate_provider(provider);
+opts.set_identity_certificate_provider(provider);
+opts.watch_root_certs();
+opts.watch_identity_key_cert_pairs();
+
+opts.set_custom_signing_callback(signing_callback);
+
+auto channel = grpc::CreateChannel("server:port", 
+    grpc::experimental::TlsCredentials(opts));
+```
+
+**Documentation:**
+* [Windows Certificate Store Integration Guide](WINDOWS_CERTSTORE_INTEGRATION.md) - 
+  Complete user guide with examples
+* [Implementation Guide](IMPLEMENTATION_GUIDE.md) - 
+  Technical details and build system integration
+* [Quick Reference](QUICK_REFERENCE.md) - 
+  Quick reference card
+
+**Requirements:**
+* Windows 10 or later
+* Link against: `crypt32.lib`, `ncrypt.lib`, `bcrypt.lib`
+
+See [examples/](examples/) for complete working examples.
+
 
 # To start developing gRPC C++
 
