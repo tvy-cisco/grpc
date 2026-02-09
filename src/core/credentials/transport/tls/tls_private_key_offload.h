@@ -18,6 +18,7 @@
 #define GRPC_SRC_CORE_CREDENTIALS_TRANSPORT_TLS_TLS_PRIVATE_KEY_OFFLOAD_H
 
 #include <grpc/support/port_platform.h>
+#include <openssl/evp.h>
 #include <openssl/ssl.h>
 
 #include <string>
@@ -28,32 +29,48 @@
 
 namespace grpc_core {
 
-// State associated with an SSL object for async private key operations.
+// State associated with an EVP_PKEY for custom private key operations.
+// This context is stored in the EVP_PKEY's ex_data and allows us to
+// intercept signing operations and delegate to the user's callback.
 struct TlsPrivateKeyOffloadContext {
   CustomPrivateKeySign private_key_sign;
   absl::StatusOr<std::string> signed_bytes;
 
-  // TSI handshake state needed to resume.
+  // The original key type (EVP_PKEY_RSA, EVP_PKEY_EC, etc.)
+  int key_type = EVP_PKEY_NONE;
+
+  // For RSA: store n and e for public key operations
+  BIGNUM* rsa_n = nullptr;
+  BIGNUM* rsa_e = nullptr;
+
+  // For EC: store the curve NID and public point
+  int ec_curve_nid = 0;
+  BIGNUM* ec_pub_x = nullptr;
+  BIGNUM* ec_pub_y = nullptr;
+
+  // TSI handshake state needed to resume (for async).
   tsi_handshaker* handshaker = nullptr;
   tsi_handshaker_on_next_done_cb notify_cb = nullptr;
   void* notify_user_data = nullptr;
+
+  ~TlsPrivateKeyOffloadContext();
 };
+
+// Creates a custom EVP_PKEY that uses the provided signing function instead
+// of a real private key. The public key parameters are extracted from the
+// provided PEM certificate chain.
+//
+// Returns nullptr on failure (e.g., invalid certificate, unsupported key type).
+EVP_PKEY* CreateCustomSigningEvpPkey(const char* pem_cert_chain, size_t pem_cert_chain_size,
+                                     CustomPrivateKeySign private_key_sign);
+
+// Retrieves the TlsPrivateKeyOffloadContext from an EVP_PKEY (if it has one).
+TlsPrivateKeyOffloadContext* GetTlsPrivateKeyOffloadContext(EVP_PKEY* pkey);
 
 // Callback function to be invoked when the user's async sign operation is
 // complete. This function is curried with 'ctx' using absl::bind_front.
 void TlsOffloadSignDoneCallback(TlsPrivateKeyOffloadContext* ctx,
-                                 absl::StatusOr<std::string> signed_data);
-
-// BoringSSL SSL_PRIVATE_KEY_METHOD implementation for TLS private key offloading
-extern const SSL_PRIVATE_KEY_METHOD TlsOffloadPrivateKeyMethod;
-
-// Creates and attaches a TlsPrivateKeyOffloadContext to an SSL object
-void AttachTlsPrivateKeyOffloadContext(SSL* ssl,
-                                        CustomPrivateKeySign private_key_sign,
-                                        tsi_handshaker* handshaker);
-
-// Retrieves the TlsPrivateKeyOffloadContext from an SSL object
-TlsPrivateKeyOffloadContext* GetTlsPrivateKeyOffloadContext(SSL* ssl);
+                                absl::StatusOr<std::string> signed_data);
 
 }  // namespace grpc_core
 

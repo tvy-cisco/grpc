@@ -705,6 +705,27 @@ static tsi_result ssl_ctx_use_private_key(SSL_CTX* context, const char* pem_key,
   }
 }
 
+// Creates a custom signing EVP_PKEY and loads it into the SSL context.
+// This is used when a custom private key signing function is provided instead
+// of an actual private key.
+static tsi_result ssl_ctx_use_custom_signing_key(
+    SSL_CTX* context, const char* pem_cert_chain, size_t pem_cert_chain_size,
+    grpc_core::CustomPrivateKeySign custom_private_key_sign) {
+  EVP_PKEY* custom_pkey = grpc_core::CreateCustomSigningEvpPkey(
+      pem_cert_chain, pem_cert_chain_size, std::move(custom_private_key_sign));
+  if (custom_pkey == nullptr) {
+    LOG(ERROR) << "Failed to create custom signing EVP_PKEY";
+    return TSI_INVALID_ARGUMENT;
+  }
+  if (!SSL_CTX_use_PrivateKey(context, custom_pkey)) {
+    LOG(ERROR) << "SSL_CTX_use_PrivateKey failed for custom signing key";
+    EVP_PKEY_free(custom_pkey);
+    return TSI_INVALID_ARGUMENT;
+  }
+  EVP_PKEY_free(custom_pkey);
+  return TSI_OK;
+}
+
 // Loads in-memory PEM verification certs into the SSL context and optionally
 // returns the verification cert names (root_names can be NULL).
 static tsi_result x509_store_load_certs(X509_STORE* cert_store,
@@ -790,9 +811,12 @@ static tsi_result ssl_ctx_load_verification_certs(SSL_CTX* context,
 
 // Populates the SSL context with a private key and a cert chain, and sets the
 // cipher list and the ephemeral ECDH key.
+// If custom_private_key_sign is provided, it will be used for signing instead
+// of the private key from key_cert_pair.
 static tsi_result populate_ssl_context(
     SSL_CTX* context, const tsi_ssl_pem_key_cert_pair* key_cert_pair,
-    const char* cipher_list) {
+    const char* cipher_list,
+    grpc_core::CustomPrivateKeySign custom_private_key_sign = nullptr) {
   tsi_result result = TSI_OK;
   if (key_cert_pair != nullptr) {
     if (key_cert_pair->cert_chain != nullptr) {
@@ -803,7 +827,20 @@ static tsi_result populate_ssl_context(
         return result;
       }
     }
-    if (key_cert_pair->private_key != nullptr) {
+    // Use custom signing key if provided, otherwise use the PEM private key
+    if (custom_private_key_sign) {
+      if (key_cert_pair->cert_chain == nullptr) {
+        LOG(ERROR) << "Certificate chain required for custom signing.";
+        return TSI_INVALID_ARGUMENT;
+      }
+      result = ssl_ctx_use_custom_signing_key(
+          context, key_cert_pair->cert_chain, strlen(key_cert_pair->cert_chain),
+          std::move(custom_private_key_sign));
+      if (result != TSI_OK) {
+        LOG(ERROR) << "Failed to set up custom signing key.";
+        return result;
+      }
+    } else if (key_cert_pair->private_key != nullptr) {
       result = ssl_ctx_use_private_key(context, key_cert_pair->private_key,
                                        strlen(key_cert_pair->private_key));
       if (result != TSI_OK || !SSL_CTX_check_private_key(context)) {
@@ -1919,25 +1956,6 @@ static tsi_result create_tsi_ssl_handshaker(SSL_CTX* ctx, int is_client,
   }
   SSL_set_bio(ssl, ssl_io, ssl_io);
 
-  // Attach custom private key signing context if configured.
-  grpc_core::CustomPrivateKeySign custom_sign;
-  if (is_client) {
-    tsi_ssl_client_handshaker_factory* client_factory =
-        reinterpret_cast<tsi_ssl_client_handshaker_factory*>(factory);
-    custom_sign = client_factory->custom_private_key_sign;
-  } else {
-    tsi_ssl_server_handshaker_factory* server_factory =
-        reinterpret_cast<tsi_ssl_server_handshaker_factory*>(factory);
-    custom_sign = server_factory->custom_private_key_sign;
-  }
-  if (custom_sign) {
-    // Note: handshaker parameter is nullptr at this point since it's not
-    // created yet. The handshaker will be set later if needed for async
-    // operations.
-    grpc_core::AttachTlsPrivateKeyOffloadContext(ssl, std::move(custom_sign),
-                                                 nullptr);
-  }
-
   if (is_client) {
     int ssl_result;
     SSL_set_connect_state(ssl);
@@ -2309,7 +2327,8 @@ tsi_result tsi_create_ssl_client_handshaker_factory_with_options(
 
   do {
     result = populate_ssl_context(ssl_context, options->pem_key_cert_pair,
-                                  options->cipher_suites);
+                                  options->cipher_suites,
+                                  options->custom_private_key_sign);
     if (result != TSI_OK) break;
 
 #if OPENSSL_VERSION_NUMBER >= 0x10100000
@@ -2500,9 +2519,9 @@ tsi_result tsi_create_ssl_server_handshaker_factory_with_options(
                                                 options->max_tls_version);
       if (result != TSI_OK) return result;
 
-      result = populate_ssl_context(impl->ssl_contexts[i],
-                                    &options->pem_key_cert_pairs[i],
-                                    options->cipher_suites);
+      result = populate_ssl_context(
+          impl->ssl_contexts[i], &options->pem_key_cert_pairs[i],
+          options->cipher_suites, options->custom_private_key_sign);
       if (result != TSI_OK) break;
 
       // TODO(elessar): Provide ability to disable session ticket keys.
