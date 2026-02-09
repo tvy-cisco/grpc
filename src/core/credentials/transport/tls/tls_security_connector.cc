@@ -213,26 +213,93 @@ void PendingVerifierRequestDestroy(
   }
 }
 
-tsi_ssl_pem_key_cert_pair* ConvertToTsiPemKeyCertPair(
-    const PemKeyCertPairList& cert_pair_list) {
+// Represents the result of converting PemKeyCertPairList.
+// Contains either a traditional TSI pair with private key string,
+// or just the cert chain when using custom signing.
+struct TsiPemKeyCertPairWithSigning {
   tsi_ssl_pem_key_cert_pair* tsi_pairs = nullptr;
+  size_t num_pairs = 0;
+  CustomPrivateKeySign custom_signing;  // Set if using custom signing
+
+  ~TsiPemKeyCertPairWithSigning() {
+    if (tsi_pairs != nullptr) {
+      grpc_tsi_ssl_pem_key_cert_pairs_destroy(tsi_pairs, num_pairs);
+    }
+  }
+
+  // Non-copyable
+  TsiPemKeyCertPairWithSigning(const TsiPemKeyCertPairWithSigning&) = delete;
+  TsiPemKeyCertPairWithSigning& operator=(const TsiPemKeyCertPairWithSigning&) =
+      delete;
+
+  // Movable
+  TsiPemKeyCertPairWithSigning() = default;
+  TsiPemKeyCertPairWithSigning(TsiPemKeyCertPairWithSigning&& other) noexcept
+      : tsi_pairs(other.tsi_pairs),
+        num_pairs(other.num_pairs),
+        custom_signing(std::move(other.custom_signing)) {
+    other.tsi_pairs = nullptr;
+    other.num_pairs = 0;
+  }
+  TsiPemKeyCertPairWithSigning& operator=(
+      TsiPemKeyCertPairWithSigning&& other) noexcept {
+    if (this != &other) {
+      if (tsi_pairs != nullptr) {
+        grpc_tsi_ssl_pem_key_cert_pairs_destroy(tsi_pairs, num_pairs);
+      }
+      tsi_pairs = other.tsi_pairs;
+      num_pairs = other.num_pairs;
+      custom_signing = std::move(other.custom_signing);
+      other.tsi_pairs = nullptr;
+      other.num_pairs = 0;
+    }
+    return *this;
+  }
+
+  // Release ownership of TSI pairs (caller takes responsibility to free)
+  tsi_ssl_pem_key_cert_pair* release() {
+    tsi_ssl_pem_key_cert_pair* result = tsi_pairs;
+    tsi_pairs = nullptr;
+    num_pairs = 0;
+    return result;
+  }
+};
+
+TsiPemKeyCertPairWithSigning ConvertToTsiPemKeyCertPair(
+    const PemKeyCertPairList& cert_pair_list) {
+  TsiPemKeyCertPairWithSigning result;
   size_t num_key_cert_pairs = cert_pair_list.size();
-  if (num_key_cert_pairs > 0) {
-    CHECK_NE(cert_pair_list.data(), nullptr);
-    tsi_pairs = static_cast<tsi_ssl_pem_key_cert_pair*>(
-        gpr_zalloc(num_key_cert_pairs * sizeof(tsi_ssl_pem_key_cert_pair)));
+  if (num_key_cert_pairs == 0) {
+    return result;
   }
+
+  CHECK_NE(cert_pair_list.data(), nullptr);
+  result.tsi_pairs = static_cast<tsi_ssl_pem_key_cert_pair*>(
+      gpr_zalloc(num_key_cert_pairs * sizeof(tsi_ssl_pem_key_cert_pair)));
+  result.num_pairs = num_key_cert_pairs;
+
   for (size_t i = 0; i < num_key_cert_pairs; i++) {
-    // Custom signing functions are not supported in this conversion path
-    CHECK(!cert_pair_list[i].has_custom_signing());
-    const std::string private_key_str = cert_pair_list[i].private_key_string();
-    CHECK(!private_key_str.empty());
     CHECK(!cert_pair_list[i].cert_chain().empty());
-    tsi_pairs[i].cert_chain =
+    result.tsi_pairs[i].cert_chain =
         gpr_strdup(cert_pair_list[i].cert_chain().c_str());
-    tsi_pairs[i].private_key = gpr_strdup(private_key_str.c_str());
+
+    if (cert_pair_list[i].has_custom_signing()) {
+      // Custom signing: only set the first custom signing function.
+      // All entries must use the same custom signing approach.
+      if (!result.custom_signing) {
+        result.custom_signing =
+            std::get<CustomPrivateKeySign>(cert_pair_list[i].private_key());
+      }
+      // Private key is nullptr for custom signing
+      result.tsi_pairs[i].private_key = nullptr;
+    } else {
+      const std::string private_key_str =
+          cert_pair_list[i].private_key_string();
+      CHECK(!private_key_str.empty());
+      result.tsi_pairs[i].private_key = gpr_strdup(private_key_str.c_str());
+    }
   }
-  return tsi_pairs;
+  return result;
 }
 
 }  // namespace
@@ -532,24 +599,22 @@ TlsChannelSecurityConnector::UpdateHandshakerFactoryLocked() {
     // std::string and absl::string_view to avoid making another copy here.
     pem_root_certs = std::string(*pem_root_certs_);
   }
-  tsi_ssl_pem_key_cert_pair* pem_key_cert_pair = nullptr;
+  TsiPemKeyCertPairWithSigning converted;
   if (pem_key_cert_pair_list_.has_value()) {
-    pem_key_cert_pair = ConvertToTsiPemKeyCertPair(*pem_key_cert_pair_list_);
+    converted = ConvertToTsiPemKeyCertPair(*pem_key_cert_pair_list_);
   }
   bool use_default_roots = !options_->watch_root_cert();
   grpc_security_status status = grpc_ssl_tsi_client_handshaker_factory_init(
-      pem_key_cert_pair,
+      converted.tsi_pairs,
       pem_root_certs.empty() || use_default_roots ? nullptr
                                                   : pem_root_certs.c_str(),
       skip_server_certificate_verification,
       grpc_get_tsi_tls_version(options_->min_tls_version()),
       grpc_get_tsi_tls_version(options_->max_tls_version()), ssl_session_cache_,
       tls_session_key_logger_.get(), options_->crl_directory().c_str(),
-      options_->crl_provider(), &client_handshaker_factory_);
-  // Free memory.
-  if (pem_key_cert_pair != nullptr) {
-    grpc_tsi_ssl_pem_key_cert_pairs_destroy(pem_key_cert_pair, 1);
-  }
+      options_->crl_provider(), std::move(converted.custom_signing),
+      &client_handshaker_factory_);
+  // Memory is freed automatically by TsiPemKeyCertPairWithSigning destructor.
   return status;
 }
 
@@ -797,21 +862,18 @@ TlsServerSecurityConnector::UpdateHandshakerFactoryLocked() {
     // std::string and absl::string_view to avoid making another copy here.
     pem_root_certs = std::string(*pem_root_certs_);
   }
-  tsi_ssl_pem_key_cert_pair* pem_key_cert_pairs = nullptr;
-  pem_key_cert_pairs = ConvertToTsiPemKeyCertPair(*pem_key_cert_pair_list_);
-  size_t num_key_cert_pairs = (*pem_key_cert_pair_list_).size();
+  TsiPemKeyCertPairWithSigning converted =
+      ConvertToTsiPemKeyCertPair(*pem_key_cert_pair_list_);
   grpc_security_status status = grpc_ssl_tsi_server_handshaker_factory_init(
-      pem_key_cert_pairs, num_key_cert_pairs,
+      converted.tsi_pairs, converted.num_pairs,
       pem_root_certs.empty() ? nullptr : pem_root_certs.c_str(),
       options_->cert_request_type(),
       grpc_get_tsi_tls_version(options_->min_tls_version()),
       grpc_get_tsi_tls_version(options_->max_tls_version()),
       tls_session_key_logger_.get(), options_->crl_directory().c_str(),
       options_->send_client_ca_list(), options_->crl_provider(),
-      &server_handshaker_factory_);
-  // Free memory.
-  grpc_tsi_ssl_pem_key_cert_pairs_destroy(pem_key_cert_pairs,
-                                          num_key_cert_pairs);
+      std::move(converted.custom_signing), &server_handshaker_factory_);
+  // Memory is freed automatically by TsiPemKeyCertPairWithSigning destructor.
   return status;
 }
 

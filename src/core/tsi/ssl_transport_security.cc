@@ -61,6 +61,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "src/core/credentials/transport/tls/grpc_tls_crl_provider.h"
+#include "src/core/credentials/transport/tls/tls_private_key_offload.h"
 #include "src/core/tsi/ssl/key_logging/ssl_key_logging.h"
 #include "src/core/tsi/ssl/session_cache/ssl_session_cache.h"
 #include "src/core/tsi/ssl_transport_security_utils.h"
@@ -108,6 +109,7 @@ struct tsi_ssl_client_handshaker_factory {
   size_t alpn_protocol_list_length;
   grpc_core::RefCountedPtr<tsi::SslSessionLRUCache> session_cache;
   grpc_core::RefCountedPtr<TlsSessionKeyLogger> key_logger;
+  grpc_core::CustomPrivateKeySign custom_private_key_sign;
 };
 
 struct tsi_ssl_server_handshaker_factory {
@@ -121,6 +123,7 @@ struct tsi_ssl_server_handshaker_factory {
   unsigned char* alpn_protocol_list;
   size_t alpn_protocol_list_length;
   grpc_core::RefCountedPtr<TlsSessionKeyLogger> key_logger;
+  grpc_core::CustomPrivateKeySign custom_private_key_sign;
 };
 
 struct tsi_ssl_handshaker {
@@ -1915,6 +1918,26 @@ static tsi_result create_tsi_ssl_handshaker(SSL_CTX* ctx, int is_client,
     return TSI_OUT_OF_RESOURCES;
   }
   SSL_set_bio(ssl, ssl_io, ssl_io);
+
+  // Attach custom private key signing context if configured.
+  grpc_core::CustomPrivateKeySign custom_sign;
+  if (is_client) {
+    tsi_ssl_client_handshaker_factory* client_factory =
+        reinterpret_cast<tsi_ssl_client_handshaker_factory*>(factory);
+    custom_sign = client_factory->custom_private_key_sign;
+  } else {
+    tsi_ssl_server_handshaker_factory* server_factory =
+        reinterpret_cast<tsi_ssl_server_handshaker_factory*>(factory);
+    custom_sign = server_factory->custom_private_key_sign;
+  }
+  if (custom_sign) {
+    // Note: handshaker parameter is nullptr at this point since it's not
+    // created yet. The handshaker will be set later if needed for async
+    // operations.
+    grpc_core::AttachTlsPrivateKeyOffloadContext(ssl, std::move(custom_sign),
+                                                 nullptr);
+  }
+
   if (is_client) {
     int ssl_result;
     SSL_set_connect_state(ssl);
@@ -2257,6 +2280,7 @@ tsi_result tsi_create_ssl_client_handshaker_factory_with_options(
   tsi_ssl_handshaker_factory_init(&impl->base);
   impl->base.vtable = &client_handshaker_factory_vtable;
   impl->ssl_context = ssl_context;
+  impl->custom_private_key_sign = options->custom_private_key_sign;
   if (options->session_cache != nullptr) {
     // Unref is called manually on factory destruction.
     impl->session_cache =
@@ -2427,6 +2451,7 @@ tsi_result tsi_create_ssl_server_handshaker_factory_with_options(
       gpr_zalloc(sizeof(*impl)));
   tsi_ssl_handshaker_factory_init(&impl->base);
   impl->base.vtable = &server_handshaker_factory_vtable;
+  impl->custom_private_key_sign = options->custom_private_key_sign;
 
   impl->ssl_contexts = static_cast<SSL_CTX**>(
       gpr_zalloc(options->num_key_cert_pairs * sizeof(SSL_CTX*)));

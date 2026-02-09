@@ -415,6 +415,7 @@ grpc_security_status grpc_ssl_tsi_client_handshaker_factory_init(
     tsi::TlsSessionKeyLoggerCache::TlsSessionKeyLogger* tls_session_key_logger,
     const char* crl_directory,
     std::shared_ptr<grpc_core::experimental::CrlProvider> crl_provider,
+    grpc_core::CustomPrivateKeySign custom_private_key_sign,
     tsi_ssl_client_handshaker_factory** handshaker_factory) {
   const char* root_certs;
   const tsi_ssl_root_certs_store* root_store;
@@ -433,9 +434,12 @@ grpc_security_status grpc_ssl_tsi_client_handshaker_factory_init(
     root_certs = pem_root_certs;
     root_store = nullptr;
   }
+  // Check if we have a certificate to use. When using custom signing,
+  // we only need the cert_chain (private_key can be null).
   bool has_key_cert_pair = pem_key_cert_pair != nullptr &&
-                           pem_key_cert_pair->private_key != nullptr &&
-                           pem_key_cert_pair->cert_chain != nullptr;
+                           pem_key_cert_pair->cert_chain != nullptr &&
+                           (pem_key_cert_pair->private_key != nullptr ||
+                            custom_private_key_sign != nullptr);
   tsi_ssl_client_handshaker_options options;
   options.pem_root_certs = root_certs;
   options.root_store = root_store;
@@ -453,6 +457,7 @@ grpc_security_status grpc_ssl_tsi_client_handshaker_factory_init(
   options.max_tls_version = max_tls_version;
   options.crl_directory = crl_directory;
   options.crl_provider = std::move(crl_provider);
+  options.custom_private_key_sign = std::move(custom_private_key_sign);
   const tsi_result result =
       tsi_create_ssl_client_handshaker_factory_with_options(&options,
                                                             handshaker_factory);
@@ -473,6 +478,7 @@ grpc_security_status grpc_ssl_tsi_server_handshaker_factory_init(
     tsi::TlsSessionKeyLoggerCache::TlsSessionKeyLogger* tls_session_key_logger,
     const char* crl_directory, bool send_client_ca_list,
     std::shared_ptr<grpc_core::experimental::CrlProvider> crl_provider,
+    grpc_core::CustomPrivateKeySign custom_private_key_sign,
     tsi_ssl_server_handshaker_factory** handshaker_factory) {
   size_t num_alpn_protocols = 0;
   const char** alpn_protocol_strings =
@@ -492,6 +498,7 @@ grpc_security_status grpc_ssl_tsi_server_handshaker_factory_init(
   options.crl_directory = crl_directory;
   options.crl_provider = std::move(crl_provider);
   options.send_client_ca_list = send_client_ca_list;
+  options.custom_private_key_sign = std::move(custom_private_key_sign);
   const tsi_result result =
       tsi_create_ssl_server_handshaker_factory_with_options(&options,
                                                             handshaker_factory);

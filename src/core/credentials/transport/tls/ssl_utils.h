@@ -83,6 +83,7 @@ grpc_security_status grpc_ssl_tsi_client_handshaker_factory_init(
     tsi_tls_version max_tls_version, tsi_ssl_session_cache* ssl_session_cache,
     tsi::TlsSessionKeyLoggerCache::TlsSessionKeyLogger* tls_session_key_logger,
     const char* crl_directory, std::shared_ptr<grpc_core::experimental::CrlProvider> crl_provider,
+    grpc_core::CustomPrivateKeySign custom_private_key_sign,
     tsi_ssl_client_handshaker_factory** handshaker_factory);
 
 grpc_security_status grpc_ssl_tsi_server_handshaker_factory_init(
@@ -92,6 +93,7 @@ grpc_security_status grpc_ssl_tsi_server_handshaker_factory_init(
     tsi::TlsSessionKeyLoggerCache::TlsSessionKeyLogger* tls_session_key_logger,
     const char* crl_directory, bool send_client_ca_list,
     std::shared_ptr<grpc_core::experimental::CrlProvider> crl_provider,
+    grpc_core::CustomPrivateKeySign custom_private_key_sign,
     tsi_ssl_server_handshaker_factory** handshaker_factory);
 
 // Free the memory occupied by key cert pairs.
