@@ -37,7 +37,7 @@ namespace grpc {
 namespace experimental {
 
 // Forward declare types from C-Core
-namespace internal {
+namespace tls_types {
 // Enum class representing TLS signature algorithm identifiers from BoringSSL.
 enum class SignatureAlgorithm : uint16_t {
   kRsaPkcs1Sha256 = 0x0401,
@@ -53,19 +53,17 @@ enum class SignatureAlgorithm : uint16_t {
 
 // Callback type for custom private key signing
 using CustomPrivateKeySign = absl::AnyInvocable<void(
-    absl::string_view data_to_sign,
-    SignatureAlgorithm signature_algorithm,
-    absl::AnyInvocable<void(absl::StatusOr<std::string> signed_data)> done_callback
-)>;
+    absl::string_view data_to_sign, SignatureAlgorithm signature_algorithm,
+    absl::AnyInvocable<void(absl::StatusOr<std::string> signed_data)> done_callback)>;
 
 // Private key variant that can hold either a string or a custom signing function
 using PrivateKey = std::variant<std::string, CustomPrivateKeySign>;
-}  // namespace internal
+}  // namespace tls_types
 
 // Re-export for convenience
-using SignatureAlgorithm = internal::SignatureAlgorithm;
-using CustomPrivateKeySign = internal::CustomPrivateKeySign;
-using PrivateKey = internal::PrivateKey;
+using SignatureAlgorithm = tls_types::SignatureAlgorithm;
+using CustomPrivateKeySign = tls_types::CustomPrivateKeySign;
+using PrivateKey = tls_types::PrivateKey;
 
 // Interface for a class that handles the process to fetch credential data.
 // Implementations should be a wrapper class of an internal provider
@@ -111,12 +109,10 @@ struct GRPCXX_DLL IdentityKeyCertPair {
 // A basic CertificateProviderInterface implementation that will load credential
 // data from static string during initialization. This provider will always
 // return the same cert data for all cert names, and reloading is not supported.
-class GRPCXX_DLL StaticDataCertificateProvider
-    : public CertificateProviderInterface {
+class GRPCXX_DLL StaticDataCertificateProvider : public CertificateProviderInterface {
  public:
-  StaticDataCertificateProvider(
-      const std::string& root_certificate,
-      const std::vector<IdentityKeyCertPair>& identity_key_cert_pairs);
+  StaticDataCertificateProvider(const std::string& root_certificate,
+                                const std::vector<IdentityKeyCertPair>& identity_key_cert_pairs);
 
   explicit StaticDataCertificateProvider(const std::string& root_certificate)
       : StaticDataCertificateProvider(root_certificate, {}) {}
@@ -153,8 +149,7 @@ class GRPCXX_DLL StaticDataCertificateProvider
 //   then renaming the new directory to the original name of the old directory.
 //   2)  using a symlink for the directory. When need to change, put new
 //   credential data in a new directory, and change symlink.
-class GRPCXX_DLL FileWatcherCertificateProvider final
-    : public CertificateProviderInterface {
+class GRPCXX_DLL FileWatcherCertificateProvider final : public CertificateProviderInterface {
  public:
   // Constructor to get credential updates from root and identity file paths.
   //
@@ -172,14 +167,12 @@ class GRPCXX_DLL FileWatcherCertificateProvider final
   FileWatcherCertificateProvider(const std::string& private_key_path,
                                  const std::string& identity_certificate_path,
                                  unsigned int refresh_interval_sec)
-      : FileWatcherCertificateProvider(private_key_path,
-                                       identity_certificate_path, "",
+      : FileWatcherCertificateProvider(private_key_path, identity_certificate_path, "",
                                        refresh_interval_sec) {}
   // Constructor to get credential updates from root file path only.
   FileWatcherCertificateProvider(const std::string& root_cert_path,
                                  unsigned int refresh_interval_sec)
-      : FileWatcherCertificateProvider("", "", root_cert_path,
-                                       refresh_interval_sec) {}
+      : FileWatcherCertificateProvider("", "", root_cert_path, refresh_interval_sec) {}
 
   ~FileWatcherCertificateProvider() override;
 
@@ -200,13 +193,12 @@ class GRPCXX_DLL FileWatcherCertificateProvider final
 // A CertificateProviderInterface implementation that holds in-memory certificate
 // data that can be updated in a thread-safe manner. Supports custom private key
 // signing functions.
-class GRPCXX_DLL InMemoryCertificateProvider final
-    : public CertificateProviderInterface {
+class GRPCXX_DLL InMemoryCertificateProvider final : public CertificateProviderInterface {
  public:
   // Factory method to create an InMemoryCertificateProvider
+  // Takes parameters by value to support both copy and move semantics
   static std::shared_ptr<InMemoryCertificateProvider> Create(
-      const std::string& root_certificate,
-      const std::vector<IdentityKeyCertPair>& identity_key_cert_pairs);
+      std::string root_certificate, std::vector<IdentityKeyCertPair> identity_key_cert_pairs);
 
   ~InMemoryCertificateProvider() override;
 
@@ -214,8 +206,8 @@ class GRPCXX_DLL InMemoryCertificateProvider final
 
   // Thread-safe methods to update credentials
   void UpdateRootCertificates(const std::string& root_certificates);
-  void UpdateIdentityKeyCertPairs(
-      const std::vector<IdentityKeyCertPair>& identity_key_cert_pairs);
+  // Takes parameter by value to support both copy and move semantics
+  void UpdateIdentityKeyCertPairs(std::vector<IdentityKeyCertPair> identity_key_cert_pairs);
 
   // Returns an OK status if the following conditions hold:
   // - the root certificates consist of one or more valid PEM blocks, and
@@ -226,9 +218,9 @@ class GRPCXX_DLL InMemoryCertificateProvider final
 
  private:
   // Private constructor - use Create() factory method
-  InMemoryCertificateProvider(
-      const std::string& root_certificate,
-      const std::vector<IdentityKeyCertPair>& identity_key_cert_pairs);
+  // Takes parameters by value to support both copy and move
+  InMemoryCertificateProvider(std::string root_certificate,
+                              std::vector<IdentityKeyCertPair> identity_key_cert_pairs);
 
   grpc_tls_certificate_provider* c_provider_ = nullptr;
 };

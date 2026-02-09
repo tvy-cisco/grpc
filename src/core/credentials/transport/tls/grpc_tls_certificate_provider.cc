@@ -155,10 +155,13 @@ absl::Status StaticDataCertificateProvider::ValidateCredentials() const {
     return status;
   }
   for (const PemKeyCertPair& pair : pem_key_cert_pairs_) {
-    absl::Status status =
-        ValidatePemKeyCertPair(pair.cert_chain(), pair.private_key());
-    if (!status.ok()) {
-      return status;
+    // Only validate if using string private key (not custom signing function)
+    if (!pair.has_custom_signing()) {
+      absl::Status status =
+          ValidatePemKeyCertPair(pair.cert_chain(), pair.private_key_string());
+      if (!status.ok()) {
+        return status;
+      }
     }
   }
   return absl::OkStatus();
@@ -275,10 +278,13 @@ absl::Status FileWatcherCertificateProvider::ValidateCredentials() const {
     return status;
   }
   for (const PemKeyCertPair& pair : pem_key_cert_pairs_) {
-    absl::Status status =
-        ValidatePemKeyCertPair(pair.cert_chain(), pair.private_key());
-    if (!status.ok()) {
-      return status;
+    // Only validate if using string private key (not custom signing function)
+    if (!pair.has_custom_signing()) {
+      absl::Status status =
+          ValidatePemKeyCertPair(pair.cert_chain(), pair.private_key_string());
+      if (!status.ok()) {
+        return status;
+      }
     }
   }
   return absl::OkStatus();
@@ -470,6 +476,8 @@ grpc_tls_certificate_provider* grpc_tls_certificate_provider_static_data_create(
       std::move(root_cert_core), std::move(identity_pairs_core));
 }
 
+namespace grpc_core {
+
 // InMemoryCertificateProvider implementation
 InMemoryCertificateProvider::InMemoryCertificateProvider(
     std::string root_certificate, PemKeyCertPairList pem_key_cert_pairs)
@@ -484,12 +492,12 @@ InMemoryCertificateProvider::InMemoryCertificateProvider(
     if (!info.root_being_watched && root_being_watched &&
         !root_certificate_.empty()) {
       distributor_->SetKeyMaterials(cert_name, root_certificate_,
-                                   absl::nullopt);
+                                    absl::nullopt);
     }
     if (!info.identity_being_watched && identity_being_watched &&
         !pem_key_cert_pairs_.empty()) {
       distributor_->SetKeyMaterials(cert_name, absl::nullopt,
-                                   pem_key_cert_pairs_);
+                                    pem_key_cert_pairs_);
     }
     info.root_being_watched = root_being_watched;
     info.identity_being_watched = identity_being_watched;
@@ -518,7 +526,7 @@ void InMemoryCertificateProvider::UpdateRootCertificates(
   for (const auto& watcher : watcher_info_) {
     if (watcher.second.root_being_watched) {
       distributor_->SetKeyMaterials(watcher.first, root_certificate_,
-                                   absl::nullopt);
+                                    absl::nullopt);
     }
   }
 }
@@ -531,7 +539,7 @@ void InMemoryCertificateProvider::UpdateIdentityKeyCertPairs(
   for (const auto& watcher : watcher_info_) {
     if (watcher.second.identity_being_watched) {
       distributor_->SetKeyMaterials(watcher.first, absl::nullopt,
-                                   pem_key_cert_pairs_);
+                                    pem_key_cert_pairs_);
     }
   }
 }
@@ -554,6 +562,8 @@ absl::Status InMemoryCertificateProvider::ValidateCredentials() const {
   }
   return absl::OkStatus();
 }
+
+}  // namespace grpc_core
 
 grpc_tls_certificate_provider*
 grpc_tls_certificate_provider_file_watcher_create(

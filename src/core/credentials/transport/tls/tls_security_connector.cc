@@ -223,12 +223,14 @@ tsi_ssl_pem_key_cert_pair* ConvertToTsiPemKeyCertPair(
         gpr_zalloc(num_key_cert_pairs * sizeof(tsi_ssl_pem_key_cert_pair)));
   }
   for (size_t i = 0; i < num_key_cert_pairs; i++) {
-    CHECK(!cert_pair_list[i].private_key().empty());
+    // Custom signing functions are not supported in this conversion path
+    CHECK(!cert_pair_list[i].has_custom_signing());
+    const std::string private_key_str = cert_pair_list[i].private_key_string();
+    CHECK(!private_key_str.empty());
     CHECK(!cert_pair_list[i].cert_chain().empty());
     tsi_pairs[i].cert_chain =
         gpr_strdup(cert_pair_list[i].cert_chain().c_str());
-    tsi_pairs[i].private_key =
-        gpr_strdup(cert_pair_list[i].private_key().c_str());
+    tsi_pairs[i].private_key = gpr_strdup(private_key_str.c_str());
   }
   return tsi_pairs;
 }

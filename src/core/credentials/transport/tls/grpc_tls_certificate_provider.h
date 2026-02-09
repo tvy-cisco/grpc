@@ -48,11 +48,9 @@
 // grpc_tls_certificate_distributor object. When the credentials and validation
 // contexts become valid or changed, a grpc_tls_certificate_provider should
 // notify its distributor so as to propagate the update to the watchers.
-struct grpc_tls_certificate_provider
-    : public grpc_core::RefCounted<grpc_tls_certificate_provider> {
+struct grpc_tls_certificate_provider : public grpc_core::RefCounted<grpc_tls_certificate_provider> {
  public:
-  virtual grpc_core::RefCountedPtr<grpc_tls_certificate_distributor>
-  distributor() const = 0;
+  virtual grpc_core::RefCountedPtr<grpc_tls_certificate_distributor> distributor() const = 0;
 
   // Compares this grpc_tls_certificate_provider object with \a other.
   // If this method returns 0, it means that gRPC can treat the two certificate
@@ -92,8 +90,7 @@ namespace grpc_core {
 
 // A basic provider class that will get credentials from string during
 // initialization.
-class StaticDataCertificateProvider final
-    : public grpc_tls_certificate_provider {
+class StaticDataCertificateProvider final : public grpc_tls_certificate_provider {
  public:
   StaticDataCertificateProvider(std::string root_certificate,
                                 PemKeyCertPairList pem_key_cert_pairs);
@@ -116,8 +113,7 @@ class StaticDataCertificateProvider final
 
   int CompareImpl(const grpc_tls_certificate_provider* other) const override {
     // TODO(yashykt): Maybe do something better here.
-    return QsortCompare(static_cast<const grpc_tls_certificate_provider*>(this),
-                        other);
+    return QsortCompare(static_cast<const grpc_tls_certificate_provider*>(this), other);
   }
 
   RefCountedPtr<grpc_tls_certificate_distributor> distributor_;
@@ -131,12 +127,10 @@ class StaticDataCertificateProvider final
 };
 
 // A provider class that will watch the credential changes on the file system.
-class FileWatcherCertificateProvider final
-    : public grpc_tls_certificate_provider {
+class FileWatcherCertificateProvider final : public grpc_tls_certificate_provider {
  public:
   FileWatcherCertificateProvider(std::string private_key_path,
-                                 std::string identity_certificate_path,
-                                 std::string root_cert_path,
+                                 std::string identity_certificate_path, std::string root_cert_path,
                                  int64_t refresh_interval_sec);
 
   ~FileWatcherCertificateProvider() override;
@@ -159,20 +153,17 @@ class FileWatcherCertificateProvider final
 
   int CompareImpl(const grpc_tls_certificate_provider* other) const override {
     // TODO(yashykt): Maybe do something better here.
-    return QsortCompare(static_cast<const grpc_tls_certificate_provider*>(this),
-                        other);
+    return QsortCompare(static_cast<const grpc_tls_certificate_provider*>(this), other);
   }
 
   // Force an update from the file system regardless of the interval.
   void ForceUpdate();
   // Read the root certificates from files and update the distributor.
-  std::optional<std::string> ReadRootCertificatesFromFile(
-      const std::string& root_cert_full_path);
+  std::optional<std::string> ReadRootCertificatesFromFile(const std::string& root_cert_full_path);
   // Read the private key and the certificate chain from files and update the
   // distributor.
   std::optional<PemKeyCertPairList> ReadIdentityKeyCertPairFromFiles(
-      const std::string& private_key_path,
-      const std::string& identity_certificate_path);
+      const std::string& private_key_path, const std::string& identity_certificate_path);
 
   // Information that is used by the refreshing thread.
   std::string private_key_path_;
@@ -197,11 +188,9 @@ class FileWatcherCertificateProvider final
 
 // A provider class that holds in-memory certificate data that can be updated
 // in a thread-safe manner. Supports custom private key signing functions.
-class InMemoryCertificateProvider final
-    : public grpc_tls_certificate_provider {
+class InMemoryCertificateProvider final : public grpc_tls_certificate_provider {
  public:
-  InMemoryCertificateProvider(std::string root_certificate,
-                              PemKeyCertPairList pem_key_cert_pairs);
+  InMemoryCertificateProvider(std::string root_certificate, PemKeyCertPairList pem_key_cert_pairs);
 
   ~InMemoryCertificateProvider() override;
 
@@ -225,14 +214,13 @@ class InMemoryCertificateProvider final
 
   int CompareImpl(const grpc_tls_certificate_provider* other) const override {
     // TODO(yashykt): Maybe do something better here.
-    return QsortCompare(static_cast<const grpc_tls_certificate_provider*>(this),
-                        other);
+    return QsortCompare(static_cast<const grpc_tls_certificate_provider*>(this), other);
   }
 
   RefCountedPtr<grpc_tls_certificate_distributor> distributor_;
-  
+
   // Guards members below.
-  Mutex mu_;
+  mutable Mutex mu_;
   std::string root_certificate_ ABSL_GUARDED_BY(mu_);
   PemKeyCertPairList pem_key_cert_pairs_ ABSL_GUARDED_BY(mu_);
   // Stores each cert_name we get from the distributor callback and its watcher
@@ -243,8 +231,8 @@ class InMemoryCertificateProvider final
 //  Checks if the private key matches the certificate's public key.
 //  Returns a not-OK status on failure, or a bool indicating
 //  whether the key/cert pair matches.
-absl::StatusOr<bool> PrivateKeyAndCertificateMatch(
-    absl::string_view private_key, absl::string_view cert_chain);
+absl::StatusOr<bool> PrivateKeyAndCertificateMatch(absl::string_view private_key,
+                                                   absl::string_view cert_chain);
 
 }  // namespace grpc_core
 
