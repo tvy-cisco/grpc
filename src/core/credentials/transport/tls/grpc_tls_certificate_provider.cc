@@ -470,6 +470,91 @@ grpc_tls_certificate_provider* grpc_tls_certificate_provider_static_data_create(
       std::move(root_cert_core), std::move(identity_pairs_core));
 }
 
+// InMemoryCertificateProvider implementation
+InMemoryCertificateProvider::InMemoryCertificateProvider(
+    std::string root_certificate, PemKeyCertPairList pem_key_cert_pairs)
+    : distributor_(MakeRefCounted<grpc_tls_certificate_distributor>()),
+      root_certificate_(std::move(root_certificate)),
+      pem_key_cert_pairs_(std::move(pem_key_cert_pairs)) {
+  distributor_->SetWatchStatusCallback([this](std::string cert_name,
+                                              bool root_being_watched,
+                                              bool identity_being_watched) {
+    MutexLock lock(&mu_);
+    WatcherInfo& info = watcher_info_[cert_name];
+    if (!info.root_being_watched && root_being_watched &&
+        !root_certificate_.empty()) {
+      distributor_->SetKeyMaterials(cert_name, root_certificate_,
+                                   absl::nullopt);
+    }
+    if (!info.identity_being_watched && identity_being_watched &&
+        !pem_key_cert_pairs_.empty()) {
+      distributor_->SetKeyMaterials(cert_name, absl::nullopt,
+                                   pem_key_cert_pairs_);
+    }
+    info.root_being_watched = root_being_watched;
+    info.identity_being_watched = identity_being_watched;
+    if (!root_being_watched && !identity_being_watched) {
+      watcher_info_.erase(cert_name);
+    }
+  });
+}
+
+InMemoryCertificateProvider::~InMemoryCertificateProvider() {
+  // Reset distributor's callback to make sure the callback won't be invoked
+  // again after this object(provider) is destroyed.
+  distributor_->SetWatchStatusCallback(nullptr);
+}
+
+UniqueTypeName InMemoryCertificateProvider::type() const {
+  static UniqueTypeName::Factory kFactory("InMemory");
+  return kFactory.Create();
+}
+
+void InMemoryCertificateProvider::UpdateRootCertificates(
+    std::string root_certificates) {
+  MutexLock lock(&mu_);
+  root_certificate_ = std::move(root_certificates);
+  // Notify all watchers of the root certificate update
+  for (const auto& watcher : watcher_info_) {
+    if (watcher.second.root_being_watched) {
+      distributor_->SetKeyMaterials(watcher.first, root_certificate_,
+                                   absl::nullopt);
+    }
+  }
+}
+
+void InMemoryCertificateProvider::UpdateIdentityKeyCertPairs(
+    PemKeyCertPairList pem_key_cert_pairs) {
+  MutexLock lock(&mu_);
+  pem_key_cert_pairs_ = std::move(pem_key_cert_pairs);
+  // Notify all watchers of the identity key-cert pairs update
+  for (const auto& watcher : watcher_info_) {
+    if (watcher.second.identity_being_watched) {
+      distributor_->SetKeyMaterials(watcher.first, absl::nullopt,
+                                   pem_key_cert_pairs_);
+    }
+  }
+}
+
+absl::Status InMemoryCertificateProvider::ValidateCredentials() const {
+  MutexLock lock(&mu_);
+  absl::Status status = ValidateRootCertificates(root_certificate_);
+  if (!status.ok()) {
+    return status;
+  }
+  for (const PemKeyCertPair& pair : pem_key_cert_pairs_) {
+    // Only validate if using string private key (not custom signing function)
+    if (!pair.has_custom_signing()) {
+      absl::Status status =
+          ValidatePemKeyCertPair(pair.cert_chain(), pair.private_key_string());
+      if (!status.ok()) {
+        return status;
+      }
+    }
+  }
+  return absl::OkStatus();
+}
+
 grpc_tls_certificate_provider*
 grpc_tls_certificate_provider_file_watcher_create(
     const char* private_key_path, const char* identity_certificate_path,

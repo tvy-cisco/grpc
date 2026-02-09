@@ -195,6 +195,51 @@ class FileWatcherCertificateProvider final
   std::map<std::string, WatcherInfo> watcher_info_ ABSL_GUARDED_BY(mu_);
 };
 
+// A provider class that holds in-memory certificate data that can be updated
+// in a thread-safe manner. Supports custom private key signing functions.
+class InMemoryCertificateProvider final
+    : public grpc_tls_certificate_provider {
+ public:
+  InMemoryCertificateProvider(std::string root_certificate,
+                              PemKeyCertPairList pem_key_cert_pairs);
+
+  ~InMemoryCertificateProvider() override;
+
+  RefCountedPtr<grpc_tls_certificate_distributor> distributor() const override {
+    return distributor_;
+  }
+
+  UniqueTypeName type() const override;
+
+  // Thread-safe updates
+  void UpdateRootCertificates(std::string root_certificates);
+  void UpdateIdentityKeyCertPairs(PemKeyCertPairList pem_key_cert_pairs);
+
+  absl::Status ValidateCredentials() const;
+
+ private:
+  struct WatcherInfo {
+    bool root_being_watched = false;
+    bool identity_being_watched = false;
+  };
+
+  int CompareImpl(const grpc_tls_certificate_provider* other) const override {
+    // TODO(yashykt): Maybe do something better here.
+    return QsortCompare(static_cast<const grpc_tls_certificate_provider*>(this),
+                        other);
+  }
+
+  RefCountedPtr<grpc_tls_certificate_distributor> distributor_;
+  
+  // Guards members below.
+  Mutex mu_;
+  std::string root_certificate_ ABSL_GUARDED_BY(mu_);
+  PemKeyCertPairList pem_key_cert_pairs_ ABSL_GUARDED_BY(mu_);
+  // Stores each cert_name we get from the distributor callback and its watcher
+  // information.
+  std::map<std::string, WatcherInfo> watcher_info_ ABSL_GUARDED_BY(mu_);
+};
+
 //  Checks if the private key matches the certificate's public key.
 //  Returns a not-OK status on failure, or a bool indicating
 //  whether the key/cert pair matches.

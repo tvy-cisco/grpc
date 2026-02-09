@@ -29,9 +29,12 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/core/credentials/transport/security_connector.h"
 #include "src/core/lib/iomgr/error.h"
@@ -143,10 +146,43 @@ class DefaultSslRootStore {
   static grpc_slice default_pem_root_certs_;
 };
 
+// Enum class representing TLS signature algorithm identifiers from BoringSSL.
+// The values correspond to the SSL_SIGN_* macros in <openssl/ssl.h>.
+enum class SignatureAlgorithm : uint16_t {
+  kRsaPkcs1Sha256 = 0x0401,           // SSL_SIGN_RSA_PKCS1_SHA256
+  kRsaPkcs1Sha384 = 0x0501,           // SSL_SIGN_RSA_PKCS1_SHA384
+  kRsaPkcs1Sha512 = 0x0601,           // SSL_SIGN_RSA_PKCS1_SHA512
+  kEcdsaSecp256r1Sha256 = 0x0403,     // SSL_SIGN_ECDSA_SECP256R1_SHA256
+  kEcdsaSecp384r1Sha384 = 0x0503,     // SSL_SIGN_ECDSA_SECP384R1_SHA384
+  kEcdsaSecp521r1Sha512 = 0x0603,     // SSL_SIGN_ECDSA_SECP521R1_SHA512
+  kRsaPssRsaeSha256 = 0x0804,         // SSL_SIGN_RSA_PSS_RSAE_SHA256
+  kRsaPssRsaeSha384 = 0x0805,         // SSL_SIGN_RSA_PSS_RSAE_SHA384
+  kRsaPssRsaeSha512 = 0x0806,         // SSL_SIGN_RSA_PSS_RSAE_SHA512
+};
+
+// A user's implementation MUST invoke done_callback with the signed bytes.
+// This will let gRPC take control when the async operation is complete.
+// MUST not block
+// MUST support concurrent calls
+using CustomPrivateKeySign = absl::AnyInvocable<void(
+    absl::string_view data_to_sign,
+    SignatureAlgorithm signature_algorithm,
+    absl::AnyInvocable<void(absl::StatusOr<std::string> signed_data)> done_callback
+)>;
+
+// PrivateKey variant that can hold either a PEM-encoded private key string
+// or a custom private key signing function.
+using PrivateKey = std::variant<std::string, CustomPrivateKeySign>;
+
 class PemKeyCertPair {
  public:
+  // Constructor accepting a string private key
   PemKeyCertPair(absl::string_view private_key, absl::string_view cert_chain)
-      : private_key_(private_key), cert_chain_(cert_chain) {}
+      : private_key_(std::string(private_key)), cert_chain_(cert_chain) {}
+
+  // Constructor accepting a custom private key signing function
+  PemKeyCertPair(CustomPrivateKeySign private_key_sign, absl::string_view cert_chain)
+      : private_key_(std::move(private_key_sign)), cert_chain_(cert_chain) {}
 
   // Movable.
   PemKeyCertPair(PemKeyCertPair&& other) noexcept {
@@ -159,25 +195,62 @@ class PemKeyCertPair {
     return *this;
   }
 
-  // Copyable.
+  // Copyable for string private keys only
   PemKeyCertPair(const PemKeyCertPair& other)
-      : private_key_(other.private_key()), cert_chain_(other.cert_chain()) {}
+      : cert_chain_(other.cert_chain()) {
+    if (std::holds_alternative<std::string>(other.private_key_)) {
+      private_key_ = std::get<std::string>(other.private_key_);
+    } else {
+      // Cannot copy CustomPrivateKeySign (AnyInvocable is move-only)
+      // This is a limitation - users should move instead
+      abort();
+    }
+  }
   PemKeyCertPair& operator=(const PemKeyCertPair& other) {
-    private_key_ = other.private_key();
-    cert_chain_ = other.cert_chain();
+    if (this != &other) {
+      cert_chain_ = other.cert_chain();
+      if (std::holds_alternative<std::string>(other.private_key_)) {
+        private_key_ = std::get<std::string>(other.private_key_);
+      } else {
+        // Cannot copy CustomPrivateKeySign (AnyInvocable is move-only)
+        abort();
+      }
+    }
     return *this;
   }
 
   bool operator==(const PemKeyCertPair& other) const {
-    return this->private_key() == other.private_key() &&
-           this->cert_chain() == other.cert_chain();
+    // For custom signing functions, we cannot compare them meaningfully
+    if (private_key_.index() != other.private_key_.index()) {
+      return false;
+    }
+    if (std::holds_alternative<std::string>(private_key_)) {
+      return std::get<std::string>(private_key_) == 
+             std::get<std::string>(other.private_key_) &&
+             this->cert_chain() == other.cert_chain();
+    }
+    // For custom signing functions, assume they're not equal unless same object
+    return false;
   }
 
-  const std::string& private_key() const { return private_key_; }
+  const PrivateKey& private_key() const { return private_key_; }
   const std::string& cert_chain() const { return cert_chain_; }
 
+  // Helper to check if using custom signing
+  bool has_custom_signing() const {
+    return std::holds_alternative<CustomPrivateKeySign>(private_key_);
+  }
+
+  // Helper to get the string private key (returns empty if custom signing)
+  std::string private_key_string() const {
+    if (std::holds_alternative<std::string>(private_key_)) {
+      return std::get<std::string>(private_key_);
+    }
+    return "";
+  }
+
  private:
-  std::string private_key_;
+  PrivateKey private_key_;
   std::string cert_chain_;
 };
 

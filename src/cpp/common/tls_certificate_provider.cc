@@ -18,11 +18,15 @@
 #include <grpc/grpc_security.h>
 #include <grpcpp/security/tls_certificate_provider.h>
 
+#include <memory>
 #include <string>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/log/check.h"
 #include "src/core/credentials/transport/tls/grpc_tls_certificate_provider.h"
+#include "src/core/credentials/transport/tls/ssl_utils.h"
 
 namespace grpc {
 namespace experimental {
@@ -33,8 +37,16 @@ StaticDataCertificateProvider::StaticDataCertificateProvider(
   CHECK(!root_certificate.empty() || !identity_key_cert_pairs.empty());
   grpc_tls_identity_pairs* pairs_core = grpc_tls_identity_pairs_create();
   for (const IdentityKeyCertPair& pair : identity_key_cert_pairs) {
-    grpc_tls_identity_pairs_add_pair(pairs_core, pair.private_key.c_str(),
-                                     pair.certificate_chain.c_str());
+    // Only support string private keys for StaticDataCertificateProvider
+    // Custom signing should use InMemoryCertificateProvider
+    if (std::holds_alternative<std::string>(pair.private_key)) {
+      const std::string& private_key_str = std::get<std::string>(pair.private_key);
+      grpc_tls_identity_pairs_add_pair(pairs_core, private_key_str.c_str(),
+                                       pair.certificate_chain.c_str());
+    } else {
+      CHECK(false) << "StaticDataCertificateProvider does not support custom "
+                   << "private key signing. Use InMemoryCertificateProvider instead.";
+    }
   }
   c_provider_ = grpc_tls_certificate_provider_static_data_create(
       root_certificate.c_str(), pairs_core);
@@ -70,6 +82,96 @@ absl::Status FileWatcherCertificateProvider::ValidateCredentials() const {
   auto* provider =
       grpc_core::DownCast<grpc_core::FileWatcherCertificateProvider*>(
           c_provider_);
+  return provider->ValidateCredentials();
+}
+
+// Helper function to convert C++ IdentityKeyCertPair to C-Core PemKeyCertPair
+namespace {
+grpc_core::PemKeyCertPair ConvertIdentityKeyCertPair(
+    const IdentityKeyCertPair& cpp_pair) {
+  if (std::holds_alternative<std::string>(cpp_pair.private_key)) {
+    // String private key
+    return grpc_core::PemKeyCertPair(
+        std::get<std::string>(cpp_pair.private_key),
+        cpp_pair.certificate_chain);
+  } else {
+    // Custom signing function - need to copy/move it
+    // Since CustomPrivateKeySign is move-only, we need to handle this carefully
+    // For now, we'll create a wrapper that captures the function
+    auto sign_fn = [cpp_pair](
+        absl::string_view data_to_sign,
+        grpc_core::SignatureAlgorithm signature_algorithm,
+        absl::AnyInvocable<void(absl::StatusOr<std::string>)> done_callback) mutable {
+      // Forward to the C++ custom signing function
+      if (std::holds_alternative<CustomPrivateKeySign>(cpp_pair.private_key)) {
+        auto& cpp_sign_fn = std::get<CustomPrivateKeySign>(
+            const_cast<PrivateKey&>(cpp_pair.private_key));
+        cpp_sign_fn(data_to_sign, 
+                   static_cast<SignatureAlgorithm>(signature_algorithm),
+                   std::move(done_callback));
+      } else {
+        done_callback(absl::InternalError("Private key sign function not available"));
+      }
+    };
+    return grpc_core::PemKeyCertPair(
+        std::move(sign_fn),
+        cpp_pair.certificate_chain);
+  }
+}
+}  // namespace
+
+// InMemoryCertificateProvider implementation
+InMemoryCertificateProvider::InMemoryCertificateProvider(
+    const std::string& root_certificate,
+    const std::vector<IdentityKeyCertPair>& identity_key_cert_pairs) {
+  // Convert C++ IdentityKeyCertPair to C-Core PemKeyCertPair
+  grpc_core::PemKeyCertPairList core_pairs;
+  for (const auto& cpp_pair : identity_key_cert_pairs) {
+    core_pairs.push_back(ConvertIdentityKeyCertPair(cpp_pair));
+  }
+
+  // Create the C-Core InMemoryCertificateProvider
+  auto core_provider = grpc_core::MakeRefCounted<grpc_core::InMemoryCertificateProvider>(
+      root_certificate, std::move(core_pairs));
+  c_provider_ = core_provider.release();
+  CHECK_NE(c_provider_, nullptr);
+}
+
+InMemoryCertificateProvider::~InMemoryCertificateProvider() {
+  grpc_tls_certificate_provider_release(c_provider_);
+}
+
+std::shared_ptr<InMemoryCertificateProvider>
+InMemoryCertificateProvider::Create(
+    const std::string& root_certificate,
+    const std::vector<IdentityKeyCertPair>& identity_key_cert_pairs) {
+  return std::shared_ptr<InMemoryCertificateProvider>(
+      new InMemoryCertificateProvider(root_certificate, identity_key_cert_pairs));
+}
+
+void InMemoryCertificateProvider::UpdateRootCertificates(
+    const std::string& root_certificates) {
+  auto* provider =
+      grpc_core::DownCast<grpc_core::InMemoryCertificateProvider*>(c_provider_);
+  provider->UpdateRootCertificates(root_certificates);
+}
+
+void InMemoryCertificateProvider::UpdateIdentityKeyCertPairs(
+    const std::vector<IdentityKeyCertPair>& identity_key_cert_pairs) {
+  // Convert C++ IdentityKeyCertPair to C-Core PemKeyCertPair
+  grpc_core::PemKeyCertPairList core_pairs;
+  for (const auto& cpp_pair : identity_key_cert_pairs) {
+    core_pairs.push_back(ConvertIdentityKeyCertPair(cpp_pair));
+  }
+
+  auto* provider =
+      grpc_core::DownCast<grpc_core::InMemoryCertificateProvider*>(c_provider_);
+  provider->UpdateIdentityKeyCertPairs(std::move(core_pairs));
+}
+
+absl::Status InMemoryCertificateProvider::ValidateCredentials() const {
+  auto* provider =
+      grpc_core::DownCast<grpc_core::InMemoryCertificateProvider*>(c_provider_);
   return provider->ValidateCredentials();
 }
 

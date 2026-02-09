@@ -26,12 +26,46 @@
 
 #include <memory>
 #include <string>
+#include <variant>
 #include <vector>
 
+#include "absl/functional/any_invocable.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 
 namespace grpc {
 namespace experimental {
+
+// Forward declare types from C-Core
+namespace internal {
+// Enum class representing TLS signature algorithm identifiers from BoringSSL.
+enum class SignatureAlgorithm : uint16_t {
+  kRsaPkcs1Sha256 = 0x0401,
+  kRsaPkcs1Sha384 = 0x0501,
+  kRsaPkcs1Sha512 = 0x0601,
+  kEcdsaSecp256r1Sha256 = 0x0403,
+  kEcdsaSecp384r1Sha384 = 0x0503,
+  kEcdsaSecp521r1Sha512 = 0x0603,
+  kRsaPssRsaeSha256 = 0x0804,
+  kRsaPssRsaeSha384 = 0x0805,
+  kRsaPssRsaeSha512 = 0x0806,
+};
+
+// Callback type for custom private key signing
+using CustomPrivateKeySign = absl::AnyInvocable<void(
+    absl::string_view data_to_sign,
+    SignatureAlgorithm signature_algorithm,
+    absl::AnyInvocable<void(absl::StatusOr<std::string> signed_data)> done_callback
+)>;
+
+// Private key variant that can hold either a string or a custom signing function
+using PrivateKey = std::variant<std::string, CustomPrivateKeySign>;
+}  // namespace internal
+
+// Re-export for convenience
+using SignatureAlgorithm = internal::SignatureAlgorithm;
+using CustomPrivateKeySign = internal::CustomPrivateKeySign;
+using PrivateKey = internal::PrivateKey;
 
 // Interface for a class that handles the process to fetch credential data.
 // Implementations should be a wrapper class of an internal provider
@@ -46,8 +80,32 @@ class GRPCXX_DLL CertificateProviderInterface {
 // to show local identity. The private_key and certificate_chain should always
 // match.
 struct GRPCXX_DLL IdentityKeyCertPair {
-  std::string private_key;
+  // Constructor accepting a string private key
+  IdentityKeyCertPair(std::string priv_key, std::string cert_chain)
+      : private_key(std::move(priv_key)), certificate_chain(std::move(cert_chain)) {}
+
+  // Constructor accepting a custom private key signing function
+  IdentityKeyCertPair(CustomPrivateKeySign priv_key_sign, std::string cert_chain)
+      : private_key(std::move(priv_key_sign)), certificate_chain(std::move(cert_chain)) {}
+
+  // Default constructor
+  IdentityKeyCertPair() = default;
+
+  PrivateKey private_key;
   std::string certificate_chain;
+
+  // Helper to check if using custom signing
+  bool has_custom_signing() const {
+    return std::holds_alternative<CustomPrivateKeySign>(private_key);
+  }
+
+  // Helper to get the string private key (returns empty if custom signing)
+  std::string private_key_string() const {
+    if (std::holds_alternative<std::string>(private_key)) {
+      return std::get<std::string>(private_key);
+    }
+    return "";
+  }
 };
 
 // A basic CertificateProviderInterface implementation that will load credential
@@ -136,6 +194,42 @@ class GRPCXX_DLL FileWatcherCertificateProvider final
   absl::Status ValidateCredentials() const;
 
  private:
+  grpc_tls_certificate_provider* c_provider_ = nullptr;
+};
+
+// A CertificateProviderInterface implementation that holds in-memory certificate
+// data that can be updated in a thread-safe manner. Supports custom private key
+// signing functions.
+class GRPCXX_DLL InMemoryCertificateProvider final
+    : public CertificateProviderInterface {
+ public:
+  // Factory method to create an InMemoryCertificateProvider
+  static std::shared_ptr<InMemoryCertificateProvider> Create(
+      const std::string& root_certificate,
+      const std::vector<IdentityKeyCertPair>& identity_key_cert_pairs);
+
+  ~InMemoryCertificateProvider() override;
+
+  grpc_tls_certificate_provider* c_provider() override { return c_provider_; }
+
+  // Thread-safe methods to update credentials
+  void UpdateRootCertificates(const std::string& root_certificates);
+  void UpdateIdentityKeyCertPairs(
+      const std::vector<IdentityKeyCertPair>& identity_key_cert_pairs);
+
+  // Returns an OK status if the following conditions hold:
+  // - the root certificates consist of one or more valid PEM blocks, and
+  // - every identity key-cert pair has a certificate chain that consists of
+  //   valid PEM blocks and (if not using custom signing) has a private key
+  //   that is a valid PEM block.
+  absl::Status ValidateCredentials() const;
+
+ private:
+  // Private constructor - use Create() factory method
+  InMemoryCertificateProvider(
+      const std::string& root_certificate,
+      const std::vector<IdentityKeyCertPair>& identity_key_cert_pairs);
+
   grpc_tls_certificate_provider* c_provider_ = nullptr;
 };
 

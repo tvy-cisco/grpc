@@ -51,9 +51,20 @@ class TlsCredentialsOptions {
   TlsCredentialsOptions& operator=(const TlsCredentialsOptions& other) = delete;
 
   // ---- Setters for member fields ----
+  // Deprecated: Use set_identity_certificate_provider() and
+  // set_root_certificate_provider() instead.
   // Sets the certificate provider used to store root certs and identity certs.
   void set_certificate_provider(
       std::shared_ptr<CertificateProviderInterface> certificate_provider);
+  
+  // Sets the certificate provider used to provide identity certificates.
+  void set_identity_certificate_provider(
+      std::shared_ptr<CertificateProviderInterface> certificate_provider);
+  
+  // Sets the certificate provider used to provide root certificates.
+  void set_root_certificate_provider(
+      std::shared_ptr<CertificateProviderInterface> certificate_provider);
+  
   // Watches the updates of root certificates with name |root_cert_name|.
   // If used in TLS credentials, setting this field is optional for both the
   // client side and the server side.
@@ -141,6 +152,8 @@ class TlsCredentialsOptions {
 
  private:
   std::shared_ptr<CertificateProviderInterface> certificate_provider_;
+  std::shared_ptr<CertificateProviderInterface> identity_certificate_provider_;
+  std::shared_ptr<CertificateProviderInterface> root_certificate_provider_;
   std::shared_ptr<CertificateVerifier> certificate_verifier_;
   grpc_tls_credentials_options* c_credentials_options_ = nullptr;
 };
