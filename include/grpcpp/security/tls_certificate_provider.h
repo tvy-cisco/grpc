@@ -24,12 +24,12 @@
 #include <grpc/support/port_platform.h>
 #include <grpcpp/support/config.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <variant>
 #include <vector>
 
-#include "absl/functional/any_invocable.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 
@@ -51,10 +51,14 @@ enum class SignatureAlgorithm : uint16_t {
   kRsaPssRsaeSha512 = 0x0806,
 };
 
+// Callback type for the done_callback parameter in CustomPrivateKeySign.
+// Users must invoke this callback with the signed bytes when complete.
+using PrivateKeySignDoneCallback = std::function<void(absl::StatusOr<std::string> signed_data)>;
+
 // Callback type for custom private key signing
-using CustomPrivateKeySign = absl::AnyInvocable<void(
-    absl::string_view data_to_sign, SignatureAlgorithm signature_algorithm,
-    absl::AnyInvocable<void(absl::StatusOr<std::string> signed_data)> done_callback)>;
+using CustomPrivateKeySign =
+    std::function<void(absl::string_view data_to_sign, SignatureAlgorithm signature_algorithm,
+                       PrivateKeySignDoneCallback done_callback)>;
 
 // Private key variant that can hold either a string or a custom signing function
 using PrivateKey = std::variant<std::string, CustomPrivateKeySign>;

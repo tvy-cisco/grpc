@@ -39,17 +39,18 @@ int g_ssl_ex_data_index = -1;
 // Initialize the ex_data index (called once)
 void InitExDataIndex() {
   if (g_ssl_ex_data_index == -1) {
-    g_ssl_ex_data_index = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, 
-                                                [](void*, void* ptr, CRYPTO_EX_DATA*, int, long, void*) {
-                                                  delete static_cast<TlsPrivateKeyOffloadContext*>(ptr);
-                                                });
+    g_ssl_ex_data_index = SSL_get_ex_new_index(
+        0, nullptr, nullptr, nullptr,
+        [](void*, void* ptr, CRYPTO_EX_DATA*, int, long, void*) {
+          delete static_cast<TlsPrivateKeyOffloadContext*>(ptr);
+        });
   }
 }
 
 }  // namespace
 
 void TlsOffloadSignDoneCallback(TlsPrivateKeyOffloadContext* ctx,
-                                 absl::StatusOr<std::string> signed_data) {
+                                absl::StatusOr<std::string> signed_data) {
   if (ctx == nullptr) {
     LOG(ERROR) << "TlsOffloadSignDoneCallback called with null context";
     return;
@@ -76,13 +77,14 @@ static enum ssl_private_key_result_t TlsPrivateKeySignWrapper(
   // Get the TlsPrivateKeyOffloadContext
   TlsPrivateKeyOffloadContext* ctx = GetTlsPrivateKeyOffloadContext(ssl);
   if (ctx == nullptr || !ctx->private_key_sign) {
-    LOG(ERROR) << "TlsPrivateKeySignWrapper: No offload context or sign function";
+    LOG(ERROR)
+        << "TlsPrivateKeySignWrapper: No offload context or sign function";
     return ssl_private_key_failure;
   }
 
   // Prepare data to sign
   absl::string_view data_to_sign(reinterpret_cast<const char*>(in), in_len);
-  
+
   // Create the completion callback by binding the current context
   auto done_callback = absl::bind_front(TlsOffloadSignDoneCallback, ctx);
 
@@ -90,9 +92,9 @@ static enum ssl_private_key_result_t TlsPrivateKeySignWrapper(
   // The contract with the user is that they MUST invoke the callback when
   // complete in their implementation, and their impl MUST not block.
   try {
-    ctx->private_key_sign(data_to_sign, 
-                         static_cast<SignatureAlgorithm>(signature_algorithm),
-                         std::move(done_callback));
+    ctx->private_key_sign(data_to_sign,
+                          static_cast<SignatureAlgorithm>(signature_algorithm),
+                          std::move(done_callback));
   } catch (...) {
     LOG(ERROR) << "Exception in user's private key sign function";
     return ssl_private_key_failure;
@@ -124,7 +126,7 @@ static enum ssl_private_key_result_t TlsPrivateKeyOffloadComplete(
   }
 
   const std::string& signed_data = *ctx->signed_bytes;
-  
+
   // Check if output buffer is large enough
   if (signed_data.length() > max_out) {
     LOG(ERROR) << "TlsPrivateKeyOffloadComplete: Output buffer too small";
@@ -143,18 +145,17 @@ static enum ssl_private_key_result_t TlsPrivateKeyOffloadComplete(
 const SSL_PRIVATE_KEY_METHOD TlsOffloadPrivateKeyMethod = {
     TlsPrivateKeySignWrapper,
     nullptr,  // decrypt not implemented for this use case (ECDHE only)
-    TlsPrivateKeyOffloadComplete
-};
+    TlsPrivateKeyOffloadComplete};
 
 void AttachTlsPrivateKeyOffloadContext(SSL* ssl,
-                                        CustomPrivateKeySign private_key_sign,
-                                        tsi_handshaker* handshaker) {
+                                       CustomPrivateKeySign private_key_sign,
+                                       tsi_handshaker* handshaker) {
   InitExDataIndex();
-  
+
   auto* ctx = new TlsPrivateKeyOffloadContext();
   ctx->private_key_sign = std::move(private_key_sign);
   ctx->handshaker = handshaker;
-  
+
   SSL_set_ex_data(ssl, g_ssl_ex_data_index, ctx);
   SSL_set_private_key_method(ssl, &TlsOffloadPrivateKeyMethod);
 }

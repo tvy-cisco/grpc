@@ -97,30 +97,44 @@ grpc_core::PemKeyCertPair ConvertIdentityKeyCertPair(
         std::get<std::string>(std::move(cpp_pair.private_key)),
         std::move(cpp_pair.certificate_chain));
   } else {
-    // Custom signing function
+    // Custom signing function - both use std::function now
     auto cpp_sign_fn =
         std::get<CustomPrivateKeySign>(std::move(cpp_pair.private_key));
-    auto sign_fn = [cpp_sign_fn = std::move(cpp_sign_fn)](
-                       absl::string_view data_to_sign,
-                       grpc_core::SignatureAlgorithm signature_algorithm,
-                       absl::AnyInvocable<void(absl::StatusOr<std::string>)>
-                           done_callback) mutable {
-      cpp_sign_fn(data_to_sign,
-                  static_cast<SignatureAlgorithm>(signature_algorithm),
-                  std::move(done_callback));
-    };
+    grpc_core::CustomPrivateKeySign sign_fn =
+        [cpp_sign_fn = std::move(cpp_sign_fn)](
+            absl::string_view data_to_sign,
+            grpc_core::SignatureAlgorithm signature_algorithm,
+            grpc_core::PrivateKeySignDoneCallback done_callback) {
+          cpp_sign_fn(data_to_sign,
+                      static_cast<SignatureAlgorithm>(signature_algorithm),
+                      std::move(done_callback));
+        };
     return grpc_core::PemKeyCertPair(std::move(sign_fn),
                                      std::move(cpp_pair.certificate_chain));
   }
 }
 
-// Overload for const reference (only works with string private keys)
+// Overload for const reference - works with both string and custom signing
+// since std::function is copyable
 grpc_core::PemKeyCertPair ConvertIdentityKeyCertPair(
     const IdentityKeyCertPair& cpp_pair) {
-  CHECK(std::holds_alternative<std::string>(cpp_pair.private_key))
-      << "Custom signing functions require move semantics";
-  return grpc_core::PemKeyCertPair(std::get<std::string>(cpp_pair.private_key),
-                                   cpp_pair.certificate_chain);
+  if (std::holds_alternative<std::string>(cpp_pair.private_key)) {
+    return grpc_core::PemKeyCertPair(
+        std::get<std::string>(cpp_pair.private_key),
+        cpp_pair.certificate_chain);
+  } else {
+    auto cpp_sign_fn = std::get<CustomPrivateKeySign>(cpp_pair.private_key);
+    grpc_core::CustomPrivateKeySign sign_fn =
+        [cpp_sign_fn](absl::string_view data_to_sign,
+                      grpc_core::SignatureAlgorithm signature_algorithm,
+                      grpc_core::PrivateKeySignDoneCallback done_callback) {
+          cpp_sign_fn(data_to_sign,
+                      static_cast<SignatureAlgorithm>(signature_algorithm),
+                      std::move(done_callback));
+        };
+    return grpc_core::PemKeyCertPair(std::move(sign_fn),
+                                     cpp_pair.certificate_chain);
+  }
 }
 }  // namespace
 
