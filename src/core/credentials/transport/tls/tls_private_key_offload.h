@@ -42,15 +42,16 @@ struct TlsPrivateKeyOffloadContext {
 // Callback function to be invoked when the user's async sign operation is
 // complete. This function is curried with 'ctx' using absl::bind_front.
 void TlsOffloadSignDoneCallback(TlsPrivateKeyOffloadContext* ctx,
-                                 absl::StatusOr<std::string> signed_data);
+                                absl::StatusOr<std::string> signed_data);
 
-// BoringSSL SSL_PRIVATE_KEY_METHOD implementation for TLS private key offloading
+// BoringSSL SSL_PRIVATE_KEY_METHOD implementation for TLS private key
+// offloading
 extern const SSL_PRIVATE_KEY_METHOD TlsOffloadPrivateKeyMethod;
 
 // Creates and attaches a TlsPrivateKeyOffloadContext to an SSL object
 void AttachTlsPrivateKeyOffloadContext(SSL* ssl,
-                                        CustomPrivateKeySign private_key_sign,
-                                        tsi_handshaker* handshaker);
+                                       CustomPrivateKeySign private_key_sign,
+                                       tsi_handshaker* handshaker);
 
 // Retrieves the TlsPrivateKeyOffloadContext from an SSL object
 TlsPrivateKeyOffloadContext* GetTlsPrivateKeyOffloadContext(SSL* ssl);

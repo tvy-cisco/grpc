@@ -49,15 +49,18 @@
 grpc_error_handle grpc_ssl_check_alpn(const tsi_peer* peer);
 
 // Check peer name information returned from SSL handshakes.
-grpc_error_handle grpc_ssl_check_peer_name(absl::string_view peer_name, const tsi_peer* peer);
+grpc_error_handle grpc_ssl_check_peer_name(absl::string_view peer_name,
+                                           const tsi_peer* peer);
 // Compare target_name information extracted from SSL security connectors.
-int grpc_ssl_cmp_target_name(absl::string_view target_name, absl::string_view other_target_name,
+int grpc_ssl_cmp_target_name(absl::string_view target_name,
+                             absl::string_view other_target_name,
                              absl::string_view overridden_target_name,
                              absl::string_view other_overridden_target_name);
 
 namespace grpc_core {
 // Check the host that will be set for a call is acceptable.
-absl::Status SslCheckCallHost(absl::string_view host, absl::string_view target_name,
+absl::Status SslCheckCallHost(absl::string_view host,
+                              absl::string_view target_name,
                               absl::string_view overridden_target_name,
                               grpc_auth_context* auth_context);
 }  // namespace grpc_core
@@ -67,7 +70,8 @@ const char* grpc_get_ssl_cipher_suites(void);
 
 // Map from grpc_ssl_client_certificate_request_type to
 // tsi_client_certificate_request_type.
-tsi_client_certificate_request_type grpc_get_tsi_client_certificate_request_type(
+tsi_client_certificate_request_type
+grpc_get_tsi_client_certificate_request_type(
     grpc_ssl_client_certificate_request_type grpc_request_type);
 
 // Map grpc_tls_version to tsi_tls_version.
@@ -82,12 +86,14 @@ grpc_security_status grpc_ssl_tsi_client_handshaker_factory_init(
     bool skip_server_certificate_verification, tsi_tls_version min_tls_version,
     tsi_tls_version max_tls_version, tsi_ssl_session_cache* ssl_session_cache,
     tsi::TlsSessionKeyLoggerCache::TlsSessionKeyLogger* tls_session_key_logger,
-    const char* crl_directory, std::shared_ptr<grpc_core::experimental::CrlProvider> crl_provider,
+    const char* crl_directory,
+    std::shared_ptr<grpc_core::experimental::CrlProvider> crl_provider,
     tsi_ssl_client_handshaker_factory** handshaker_factory);
 
 grpc_security_status grpc_ssl_tsi_server_handshaker_factory_init(
     tsi_ssl_pem_key_cert_pair* key_cert_pairs, size_t num_key_cert_pairs,
-    const char* pem_root_certs, grpc_ssl_client_certificate_request_type client_certificate_request,
+    const char* pem_root_certs,
+    grpc_ssl_client_certificate_request_type client_certificate_request,
     tsi_tls_version min_tls_version, tsi_tls_version max_tls_version,
     tsi::TlsSessionKeyLoggerCache::TlsSessionKeyLogger* tls_session_key_logger,
     const char* crl_directory, bool send_client_ca_list,
@@ -100,9 +106,11 @@ void grpc_tsi_ssl_pem_key_cert_pairs_destroy(tsi_ssl_pem_key_cert_pair* kp,
 // Exposed for testing only.
 grpc_core::RefCountedPtr<grpc_auth_context> grpc_ssl_peer_to_auth_context(
     const tsi_peer* peer, const char* transport_security_type);
-tsi_peer grpc_shallow_peer_from_ssl_auth_context(const grpc_auth_context* auth_context);
+tsi_peer grpc_shallow_peer_from_ssl_auth_context(
+    const grpc_auth_context* auth_context);
 void grpc_shallow_peer_destruct(tsi_peer* peer);
-int grpc_ssl_host_matches_name(const tsi_peer* peer, absl::string_view peer_name);
+int grpc_ssl_host_matches_name(const tsi_peer* peer,
+                               absl::string_view peer_name);
 
 // --- Default SSL Root Store. ---
 namespace grpc_core {
@@ -154,15 +162,16 @@ enum class SignatureAlgorithm : uint16_t {
 
 // Callback type for the done_callback parameter in CustomPrivateKeySign.
 // Users must invoke this callback with the signed bytes when complete.
-using PrivateKeySignDoneCallback = std::function<void(absl::StatusOr<std::string> signed_data)>;
+using PrivateKeySignDoneCallback =
+    std::function<void(absl::StatusOr<std::string> signed_data)>;
 
 // A user's implementation MUST invoke done_callback with the signed bytes.
 // This will let gRPC take control when the async operation is complete.
 // MUST not block
 // MUST support concurrent calls
-using CustomPrivateKeySign =
-    std::function<void(absl::string_view data_to_sign, SignatureAlgorithm signature_algorithm,
-                       PrivateKeySignDoneCallback done_callback)>;
+using CustomPrivateKeySign = std::function<void(
+    absl::string_view data_to_sign, SignatureAlgorithm signature_algorithm,
+    PrivateKeySignDoneCallback done_callback)>;
 
 // PrivateKey variant that can hold either a PEM-encoded private key string
 // or a custom private key signing function.
@@ -175,7 +184,8 @@ class PemKeyCertPair {
       : private_key_(std::string(private_key)), cert_chain_(cert_chain) {}
 
   // Constructor accepting a custom private key signing function
-  PemKeyCertPair(CustomPrivateKeySign private_key_sign, absl::string_view cert_chain)
+  PemKeyCertPair(CustomPrivateKeySign private_key_sign,
+                 absl::string_view cert_chain)
       : private_key_(std::move(private_key_sign)), cert_chain_(cert_chain) {}
 
   // Movable.
@@ -199,7 +209,8 @@ class PemKeyCertPair {
       return false;
     }
     if (std::holds_alternative<std::string>(private_key_)) {
-      return std::get<std::string>(private_key_) == std::get<std::string>(other.private_key_) &&
+      return std::get<std::string>(private_key_) ==
+                 std::get<std::string>(other.private_key_) &&
              this->cert_chain() == other.cert_chain();
     }
     // For custom signing functions, assume they're not equal unless same object
