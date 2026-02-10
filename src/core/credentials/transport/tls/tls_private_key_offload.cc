@@ -251,33 +251,54 @@ bool ParseDigestInfo(const unsigned char* digest_info, int digest_info_len,
 // Custom RSA private encrypt function - used for RSA PKCS#1 v1.5 signatures
 // during TLS handshakes. OpenSSL calls RSA_private_encrypt instead of the
 // sign method for certain signature operations.
+//
+// For RSA-PSS (TLS 1.3), OpenSSL calls this with RSA_NO_PADDING after applying
+// PSS padding. In that case, we pass the pre-padded block to the callback.
 int CustomRsaPrivateEncrypt(int flen, const unsigned char* from,
                             unsigned char* to, RSA* rsa, int padding) {
-  // Only PKCS#1 v1.5 padding is used for signatures in TLS
-  if (padding != RSA_PKCS1_PADDING) {
-    LOG(ERROR) << "CustomRsaPrivateEncrypt: Unsupported padding type: "
-               << padding;
-    return -1;
-  }
-
   TlsPrivateKeyOffloadContext* ctx = GetContextFromRsa(rsa);
   if (ctx == nullptr || !ctx->private_key_sign) {
     LOG(ERROR) << "CustomRsaPrivateEncrypt: No context or sign function";
     return -1;
   }
 
-  // Parse the DigestInfo to extract the hash algorithm and hash value
+  int rsa_size = RSA_size(rsa);
   SignatureAlgorithm sig_alg;
-  const unsigned char* hash_data;
-  size_t hash_len;
-  if (!ParseDigestInfo(from, flen, &sig_alg, &hash_data, &hash_len)) {
-    LOG(ERROR) << "CustomRsaPrivateEncrypt: Failed to parse DigestInfo "
-               << "(input len=" << flen << ")";
+  absl::string_view data_to_sign;
+
+  if (padding == RSA_PKCS1_PADDING) {
+    // PKCS#1 v1.5 signature: input is DigestInfo (hash OID + hash value)
+    const unsigned char* hash_data;
+    size_t hash_len;
+    if (!ParseDigestInfo(from, flen, &sig_alg, &hash_data, &hash_len)) {
+      LOG(ERROR) << "CustomRsaPrivateEncrypt: Failed to parse DigestInfo "
+                 << "(input len=" << flen << ")";
+      return -1;
+    }
+    data_to_sign =
+        absl::string_view(reinterpret_cast<const char*>(hash_data), hash_len);
+  } else if (padding == RSA_NO_PADDING) {
+    // RSA-PSS (TLS 1.3): input is already PSS-padded, full RSA block size.
+    // The callback must perform raw RSA private key operation (modular exp).
+    // We pass the full padded block; the callback should return the raw
+    // signature (also RSA block size).
+    if (flen != rsa_size) {
+      LOG(ERROR) << "CustomRsaPrivateEncrypt: RSA_NO_PADDING expects input "
+                 << "size=" << rsa_size << ", got " << flen;
+      return -1;
+    }
+    // Use PSS-SHA256 as indicator. The data is pre-padded, so the specific
+    // hash doesn't matter - callback must do raw RSA on this block.
+    sig_alg = SignatureAlgorithm::kRsaPssRsaeSha256;
+    data_to_sign = absl::string_view(reinterpret_cast<const char*>(from), flen);
+    LOG(WARNING) << "CustomRsaPrivateEncrypt: RSA_NO_PADDING (PSS) - callback "
+                 << "receives pre-padded " << flen
+                 << "-byte block, must do raw RSA";
+  } else {
+    LOG(ERROR) << "CustomRsaPrivateEncrypt: Unsupported padding type: "
+               << padding;
     return -1;
   }
-
-  absl::string_view data_to_sign(reinterpret_cast<const char*>(hash_data),
-                                 hash_len);
 
   bool sign_complete = false;
   absl::StatusOr<std::string> result;
@@ -302,7 +323,6 @@ int CustomRsaPrivateEncrypt(int flen, const unsigned char* from,
     return -1;
   }
 
-  int rsa_size = RSA_size(rsa);
   if (static_cast<int>(result->size()) > rsa_size) {
     LOG(ERROR) << "CustomRsaPrivateEncrypt: Signature too large";
     return -1;
