@@ -43,7 +43,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 
-
 namespace grpc_core {
 
 namespace {
@@ -420,7 +419,7 @@ void TlsOffloadSignDoneCallback(TlsPrivateKeyOffloadContext* ctx,
 
   // For async operations, notify TSI to re-enter handshake
   if (ctx->notify_cb != nullptr) {
-    ctx->notify_cb(ctx->handshaker, ctx->notify_user_data, TSI_OK);
+    ctx->notify_cb(TSI_OK, ctx->notify_user_data, nullptr, 0, nullptr);
   }
 }
 
