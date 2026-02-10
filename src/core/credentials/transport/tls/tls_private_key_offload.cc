@@ -203,6 +203,115 @@ int CustomEcdsaSign(int type, const unsigned char* dgst, int dlen,
   return 1;
 }
 
+// DigestInfo prefixes for PKCS#1 v1.5 signatures (ASN.1 encoded hash OID)
+// These are the standard DER encodings that precede the hash value
+static const unsigned char kDigestInfoSha256[] = {
+    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01,
+    0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20};  // 19 bytes
+static const unsigned char kDigestInfoSha384[] = {
+    0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01,
+    0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30};  // 19 bytes
+static const unsigned char kDigestInfoSha512[] = {
+    0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01,
+    0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40};  // 19 bytes
+
+// Parses DigestInfo to extract hash algorithm and hash value.
+// Returns true on success, populating sig_alg and hash/hash_len.
+bool ParseDigestInfo(const unsigned char* digest_info, int digest_info_len,
+                     SignatureAlgorithm* sig_alg, const unsigned char** hash,
+                     size_t* hash_len) {
+  constexpr size_t kPrefixLen = 19;
+  // SHA-256: 19-byte prefix + 32-byte hash = 51 bytes
+  if (digest_info_len == 51 &&
+      std::memcmp(digest_info, kDigestInfoSha256, kPrefixLen) == 0) {
+    *sig_alg = SignatureAlgorithm::kRsaPkcs1Sha256;
+    *hash = digest_info + kPrefixLen;
+    *hash_len = 32;
+    return true;
+  }
+  // SHA-384: 19-byte prefix + 48-byte hash = 67 bytes
+  if (digest_info_len == 67 &&
+      std::memcmp(digest_info, kDigestInfoSha384, kPrefixLen) == 0) {
+    *sig_alg = SignatureAlgorithm::kRsaPkcs1Sha384;
+    *hash = digest_info + kPrefixLen;
+    *hash_len = 48;
+    return true;
+  }
+  // SHA-512: 19-byte prefix + 64-byte hash = 83 bytes
+  if (digest_info_len == 83 &&
+      std::memcmp(digest_info, kDigestInfoSha512, kPrefixLen) == 0) {
+    *sig_alg = SignatureAlgorithm::kRsaPkcs1Sha512;
+    *hash = digest_info + kPrefixLen;
+    *hash_len = 64;
+    return true;
+  }
+  return false;
+}
+
+// Custom RSA private encrypt function - used for RSA PKCS#1 v1.5 signatures
+// during TLS handshakes. OpenSSL calls RSA_private_encrypt instead of the
+// sign method for certain signature operations.
+int CustomRsaPrivateEncrypt(int flen, const unsigned char* from,
+                            unsigned char* to, RSA* rsa, int padding) {
+  // Only PKCS#1 v1.5 padding is used for signatures in TLS
+  if (padding != RSA_PKCS1_PADDING) {
+    LOG(ERROR) << "CustomRsaPrivateEncrypt: Unsupported padding type: "
+               << padding;
+    return -1;
+  }
+
+  TlsPrivateKeyOffloadContext* ctx = GetContextFromRsa(rsa);
+  if (ctx == nullptr || !ctx->private_key_sign) {
+    LOG(ERROR) << "CustomRsaPrivateEncrypt: No context or sign function";
+    return -1;
+  }
+
+  // Parse the DigestInfo to extract the hash algorithm and hash value
+  SignatureAlgorithm sig_alg;
+  const unsigned char* hash_data;
+  size_t hash_len;
+  if (!ParseDigestInfo(from, flen, &sig_alg, &hash_data, &hash_len)) {
+    LOG(ERROR) << "CustomRsaPrivateEncrypt: Failed to parse DigestInfo "
+               << "(input len=" << flen << ")";
+    return -1;
+  }
+
+  absl::string_view data_to_sign(reinterpret_cast<const char*>(hash_data),
+                                 hash_len);
+
+  bool sign_complete = false;
+  absl::StatusOr<std::string> result;
+
+  auto done_callback = [&sign_complete,
+                        &result](absl::StatusOr<std::string> signed_data) {
+    result = std::move(signed_data);
+    sign_complete = true;
+  };
+
+  ctx->private_key_sign(data_to_sign, sig_alg, std::move(done_callback));
+
+  if (!sign_complete) {
+    LOG(ERROR) << "CustomRsaPrivateEncrypt: Sign callback did not complete "
+                  "synchronously";
+    return -1;
+  }
+
+  if (!result.ok()) {
+    LOG(ERROR) << "CustomRsaPrivateEncrypt: Sign failed: "
+               << result.status().message();
+    return -1;
+  }
+
+  int rsa_size = RSA_size(rsa);
+  if (static_cast<int>(result->size()) > rsa_size) {
+    LOG(ERROR) << "CustomRsaPrivateEncrypt: Signature too large";
+    return -1;
+  }
+
+  std::memcpy(to, result->data(), result->size());
+  return static_cast<int>(result->size());
+}
+
 // Note: InitCustomRsaMethod and InitCustomEcKeyMethod use deprecated APIs
 // (RSA_meth_*, EC_KEY_METHOD_*) because OpenSSL 3.x provides no alternative
 // for custom signing callbacks without implementing a full OSSL_PROVIDER.
@@ -214,8 +323,9 @@ void InitCustomRsaMethod() {
     if (g_custom_rsa_method != nullptr) {
       RSA_meth_set1_name(g_custom_rsa_method, "gRPC Custom RSA Method");
       RSA_meth_set_sign(g_custom_rsa_method, CustomRsaSign);
-      // We don't implement private encrypt/decrypt since we only need signing
-      RSA_meth_set_priv_enc(g_custom_rsa_method, nullptr);
+      // Implement private encrypt for RSA PKCS#1 v1.5 signatures in TLS
+      RSA_meth_set_priv_enc(g_custom_rsa_method, CustomRsaPrivateEncrypt);
+      // Private decrypt is not needed for TLS signing operations
       RSA_meth_set_priv_dec(g_custom_rsa_method, nullptr);
     }
   }
