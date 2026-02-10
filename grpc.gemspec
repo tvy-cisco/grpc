@@ -310,6 +310,8 @@ Gem::Specification.new do |s|
   s.files += %w( src/core/credentials/transport/tls/ssl_utils.h )
   s.files += %w( src/core/credentials/transport/tls/tls_credentials.cc )
   s.files += %w( src/core/credentials/transport/tls/tls_credentials.h )
+  s.files += %w( src/core/credentials/transport/tls/tls_private_key_offload.cc )
+  s.files += %w( src/core/credentials/transport/tls/tls_private_key_offload.h )
   s.files += %w( src/core/credentials/transport/tls/tls_security_connector.cc )
   s.files += %w( src/core/credentials/transport/tls/tls_security_connector.h )
   s.files += %w( src/core/credentials/transport/tls/tls_utils.cc )

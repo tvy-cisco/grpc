@@ -2223,6 +2223,7 @@ add_library(grpc
   src/core/credentials/transport/tls/load_system_roots_windows.cc
   src/core/credentials/transport/tls/ssl_utils.cc
   src/core/credentials/transport/tls/tls_credentials.cc
+  src/core/credentials/transport/tls/tls_private_key_offload.cc
   src/core/credentials/transport/tls/tls_security_connector.cc
   src/core/credentials/transport/tls/tls_utils.cc
   src/core/credentials/transport/transport_credentials.cc

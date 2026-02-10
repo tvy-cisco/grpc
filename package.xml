@@ -292,6 +292,8 @@
     <file baseinstalldir="/" name="src/core/credentials/transport/tls/ssl_utils.h" role="src" />
     <file baseinstalldir="/" name="src/core/credentials/transport/tls/tls_credentials.cc" role="src" />
     <file baseinstalldir="/" name="src/core/credentials/transport/tls/tls_credentials.h" role="src" />
+    <file baseinstalldir="/" name="src/core/credentials/transport/tls/tls_private_key_offload.cc" role="src" />
+    <file baseinstalldir="/" name="src/core/credentials/transport/tls/tls_private_key_offload.h" role="src" />
     <file baseinstalldir="/" name="src/core/credentials/transport/tls/tls_security_connector.cc" role="src" />
     <file baseinstalldir="/" name="src/core/credentials/transport/tls/tls_security_connector.h" role="src" />
     <file baseinstalldir="/" name="src/core/credentials/transport/tls/tls_utils.cc" role="src" />

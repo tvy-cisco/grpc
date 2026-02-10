@@ -4118,12 +4118,14 @@ grpc_cc_library(
     name = "tsi_ssl_credentials",
     srcs = [
         "//src/core:credentials/transport/tls/ssl_utils.cc",
+        "//src/core:credentials/transport/tls/tls_private_key_offload.cc",
         "//src/core:tsi/ssl/key_logging/ssl_key_logging.cc",
         "//src/core:tsi/ssl_transport_security.cc",
         "//src/core:tsi/ssl_transport_security_utils.cc",
     ],
     hdrs = [
         "//src/core:credentials/transport/tls/ssl_utils.h",
+        "//src/core:credentials/transport/tls/tls_private_key_offload.h",
         "//src/core:tsi/ssl/key_logging/ssl_key_logging.h",
         "//src/core:tsi/ssl_transport_security.h",
         "//src/core:tsi/ssl_transport_security_utils.h",

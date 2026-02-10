@@ -424,6 +424,8 @@ Pod::Spec.new do |s|
                       'src/core/credentials/transport/tls/ssl_utils.h',
                       'src/core/credentials/transport/tls/tls_credentials.cc',
                       'src/core/credentials/transport/tls/tls_credentials.h',
+                      'src/core/credentials/transport/tls/tls_private_key_offload.cc',
+                      'src/core/credentials/transport/tls/tls_private_key_offload.h',
                       'src/core/credentials/transport/tls/tls_security_connector.cc',
                       'src/core/credentials/transport/tls/tls_security_connector.h',
                       'src/core/credentials/transport/tls/tls_utils.cc',
